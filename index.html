@@ -54,8 +54,8 @@ header p{color:var(--mu);letter-spacing:.3em;font-size:12px;margin:10px 0 0;text
 .warn{color:var(--warn);font-size:13px;padding:5px 0}
 .dup{padding:10px 0;border-bottom:1px solid var(--line)}.dup div{font-size:12.5px;color:var(--mu);margin:2px 0}
 .dup button{all:unset;cursor:pointer;margin:6px 6px 0 0;padding:6px 12px;border-radius:9px;border:1px solid var(--line);font-size:13px}.dup button.on{background:var(--gold);color:#1d1a24;border-color:var(--gold);font-weight:700}
-.add{display:flex;gap:8px;flex-wrap:wrap}.add input{flex:1 1 200px;background:var(--bg2);border:1px solid var(--line);color:var(--tx);padding:11px 14px;border-radius:11px;font:inherit}.add input[type=number]{flex:0 0 90px}.add input:focus{outline:2px solid var(--gold);border-color:transparent}
-.tag{display:inline-flex;gap:6px;margin:8px 8px 0 0;background:var(--bg2);border:1px solid var(--line);padding:4px 10px;border-radius:99px;font-size:13px}.tag u{cursor:pointer;color:var(--bad);text-decoration:none}
+.rc{border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;background:var(--bg2)}.rc .why{margin:0 0 8px;color:var(--warn);font-size:13px}.rc details{margin:6px 0 10px;font-size:12px;color:var(--mu)}.rc pre{white-space:pre-wrap;max-height:160px;overflow:auto;background:var(--bg);padding:8px;border-radius:8px}
+.rc input{background:var(--card);border:1px solid var(--line);color:var(--tx);padding:9px 12px;border-radius:10px;font:inherit;min-width:0}.rc .f,.rc .ir,.rc .bar2{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}.rc .rco,.rc .roid{flex:1 1 120px}.rc .rn{flex:1 1 220px}.rc .rq{width:80px}.rc .ir button{all:unset;cursor:pointer;color:var(--bad);padding:0 8px}.rc .bar2 .btn{padding:9px 16px}
 .err{color:var(--bad);text-align:center;margin-top:16px}
 footer{text-align:center;color:var(--mu);font-size:12px;margin-top:40px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important}}
@@ -95,7 +95,7 @@ function norm(raw){
  return size&&!name.toUpperCase().endsWith(size.toUpperCase())?(name+" "+size).trim():name}
 function parsePostex(t,notes,src){
  const out=[];if(!t.includes("Consignee Information"))return out;
- let ch=t.split(/(?=Consignee Information\s+Shipment Information)/);if(ch.length<=1)ch=t.split(new RegExp("(?=Order Ref:\\s*"+OID+")"));
+ const cre=/(?=Consignee Information\s+Shipment Information)/;let ch=cre.test(t)?t.split(cre):t.split(new RegExp("(?=Order Ref:\\s*"+OID+")"));
  for(const c of ch){
   let r=c.match(new RegExp("Order Ref:\\s*("+OID+")"))||c.match(new RegExp("("+OID+")"));if(!r)continue;
   const oid=r[1].replace(/\s+/g,""),pcs=c.match(/Pieces:\s*(\d+)/);let items=[];
@@ -108,7 +108,7 @@ function parsePostex(t,notes,src){
  return out}
 function parseInsta(t,notes,src){
  const out=[];if(!t.includes("Order #:")&&!t.toUpperCase().includes("INSTA"))return out;
- let ch=t.split(/(?=Order #:)/);if(ch.length<=1)ch=t.split(/(?=INSTA)/i);
+ let ch=t.includes("Order #:")?t.split(/(?=Order #:)/):t.split(/(?=INSTA)/i);
  for(const c of ch){
   const r=c.match(new RegExp("Order #:\\s*("+OID+")","i"));if(!r)continue;
   const oid=r[1].replace(/\s+/g,""),pcs=c.match(/Pieces:\s*(\d+)/i),seg=c.match(/Weight:\s*[\d.]+\s*Kg\s*(?:[A-Z]{0,2}\d{9,}\s*)?(.*)/is);
@@ -125,9 +125,39 @@ async function pdfText(buf){
   for(const it of tc.items){if(!it.str)continue;const y=it.transform[5];let r=rows.find(r=>Math.abs(r.y-y)<=2.5);if(!r){r={y,a:[]};rows.push(r)}r.a.push({x:it.transform[4],w:it.width,s:it.str})}
   rows.sort((a,b)=>b.y-a.y);
   out.push(rows.map(r=>{r.a.sort((a,b)=>a.x-b.x);let s="",end=null;for(const t of r.a){if(end!==null&&t.x-end>1.5&&!s.endsWith(" ")&&!t.s.startsWith(" "))s+=" ";s+=t.s;end=t.x+t.w}return s.trim()}).join("\n"))}
- return out.join("\n")}
+ return out}
 const sig=o=>o.courier+JSON.stringify([...o.items].map(String).sort())+o.pieces;
-let files=[],choices={},extras=[];
+let files=[],choices={},extras=[],reviews=[],rid=0;
+/* Best-effort guess for a label the app does not recognise: courier, order #, items. The user always confirms it. */
+function guess(t,oid){
+ const m1=t.match(/#\s*\d{3,}/),m2=t.match(/Order\s*(?:No|Number|Ref|ID|#)?\s*[:.#]*\s*#?\s*(\d{3,})/i),id=oid||(m1?m1[0].replace(/\s+/g,""):m2?"#"+m2[1]:""),co=(t.match(/\b(INSTA|PostEx|TCS|Leopards|M&P|MNP|Trax|Blue-?Ex|Call ?Courier|Swyft|Stallion|Daewoo|Rider|DHL|FedEx|Pakistan Post)\b/i)||["OTHER"])[0].toUpperCase();
+ const P=[[/(\d+)\s*[x×]\s*([A-Za-z][^,\]\[\n]{2,60})/gi,1,2],[/([A-Za-z][^,*\n\]\[]{2,60}?)\s*[*x×]\s*(\d+)\b/gi,2,1],[/([A-Za-z][^\n]{2,60}?)[\s\-]*Qty:?\s*\(?\s*(\d+)/gi,2,1]];
+ let items=[];
+ for(const[re,qi,ni]of P){items=[...t.matchAll(re)].map(m=>[norm(m[ni].trim().replace(/^(?:product|item|description|desc)s?\s*[:\-]?\s*/i,"")),+m[qi]]).filter(x=>x[0]&&x[1]>0&&x[1]<1000);if(items.length)break}
+ return{oid:id,co,items}}
+/* Pages that no known courier reader understood, or labels whose items could not be read, become "needs your help" cards. */
+function makeReviews(fname,pages,orders,notes){
+ const have=orders.map(o=>o.order),bad=[],keep=[];
+ notes.forEach(n=>{const m=n.match(/^(#\d+(?:\s*\([a-zA-Z]\))?):.*skipped/);m?bad.push(m[1].replace(/\s+/g,"")):keep.push(n)});
+ notes.length=0;notes.push(...keep);
+ pages.forEach((t,i)=>{
+  const flat=t.replace(/\s+/g,"");
+  if(t.trim().length<25||/I received\s+\d+\s+shipments/i.test(t))return;
+  const sk=bad.find(id=>flat.includes(id));
+  if(!sk&&have.some(id=>flat.includes(id)))return;
+  reviews.push({id:++rid,file:fname,page:i+1,text:t,reason:sk?"I found this label but could not read its items.":"I do not recognise this label layout.",...guess(t,sk||"")})})}
+const rowH=it=>`<div class="ir"><input class="rn" value="${e(it[0])}" placeholder="Item name"><input class="rq" type="number" min="1" value="${it[1]}"><button data-a="del" title="Remove">✕</button></div>`;
+const revH=()=>reviews.length?`<div class="card"><h3>Needs your help (${reviews.length})</h3>${reviews.map(r=>`<div class="rc" data-rid="${r.id}"><p class="why">${e(r.file)} · page ${r.page} — ${e(r.reason)} Please check and fill in below.</p><details><summary>Show label text</summary><pre>${e(r.text.slice(0,1500))}</pre></details><div class="f"><input class="rco" value="${e(r.co)}" placeholder="Courier"><input class="roid" value="${e(r.oid)}" placeholder="Order #"></div><div class="its">${(r.items.length?r.items:[["",1]]).map(rowH).join("")}</div><div class="bar2"><button class="btn" data-a="add">+ Add item</button><button class="btn p" data-a="ok">Use this label</button><button class="btn" data-a="skip">Not an order — ignore</button></div></div>`).join("")}</div>`:"";
+function reviewAct(b){const a=b.dataset.a,card=b.closest(".rc");
+ if(a==="add"){card.querySelector(".its").insertAdjacentHTML("beforeend",rowH(["",1]));return}
+ if(a==="del"){b.closest(".ir").remove();return}
+ const r=reviews.find(x=>x.id==card.dataset.rid);if(!r)return;
+ if(a==="skip"){reviews=reviews.filter(x=>x!==r);render();return}
+ const items=[...card.querySelectorAll(".ir")].map(w=>[norm(w.querySelector(".rn").value.trim()),parseInt(w.querySelector(".rq").value)]).filter(x=>x[0]&&x[1]>0);
+ if(!items.length){$("err").textContent="Add at least one item with a quantity.";return}
+ const f=files.find(x=>x.name===r.file),oid=(card.querySelector(".roid").value.trim()||"NOID-"+r.id).replace(/\s+/g,"");
+ f.orders.push({order:oid,courier:(card.querySelector(".rco").value.trim()||"OTHER").toUpperCase(),pieces:items.reduce((n,x)=>n+x[1],0),items,source:r.file,tracking:"?",note:"entered manually"});
+ reviews=reviews.filter(x=>x!==r);chips();render()}
 function compute(){
  const notes=files.flatMap(f=>f.notes),found=files.flatMap(f=>f.orders.map(o=>({...o,items:o.items.map(i=>[...i])})));
  const g=new Map();found.forEach(o=>{if(!g.has(o.order))g.set(o.order,[]);g.get(o.order).push(o)});
@@ -189,33 +219,31 @@ function dl(blob,name){const a=document.createElement("a");a.href=URL.createObje
 function count(el,to){const t0=performance.now();(function s(t){const p=Math.min(1,(t-t0)/900);el.textContent=Math.round(to*(1-Math.pow(1-p,3)));if(p<1)requestAnimationFrame(s)})(t0)}
 let D=null;
 function render(first){
- D=compute();const o=$("out");o.style.display="block";
+ D=compute();const o=$("out"),rvH=revH();o.style.display="block";$("err").textContent=reviews.length?`${reviews.length} label(s) need your check below before you can download.`:"";
  const dupH=D.dups.length?`<div class="card"><h3>Duplicate order IDs — choose which label to keep</h3>${D.dups.map((u,i)=>`<div class="dup" data-oid="${e(u.oid)}"><b>${e(u.oid)}</b>${u.en.map((x,j)=>`<div>[${j+1}] ${x.courier} · ${e(x.source)} · pieces ${x.pieces} · ${e(x.items.map(a=>a[1]+" × "+a[0]).join(", "))}</div>`).join("")}${u.en.map((x,j)=>`<button data-c="${j}" class="${u.ch===j?"on":""}">Keep ${j+1} (${x.courier})</button>`).join("")}<button data-c="B" class="${u.ch==="B"?"on":""}">Keep both</button></div>`).join("")}</div>`:"";
- const exH=`<div class="card"><h3>Add extra items (no label)</h3><div class="add"><input id="xn" placeholder="Item name, e.g. ATOMIZER FOR TRAVEL Blue"><input id="xq" type="number" min="1" placeholder="Qty"><button class="btn" id="xa">Add</button></div>${extras.map((x,i)=>`<span class="tag">${e(x[0])} × ${x[1]} <u data-x="${i}">✕</u></span>`).join("")}</div>`;
- if(D.empty){o.innerHTML=dupH+exH+`<div class="card"><h3>Nothing to build</h3>${D.notes.map(n=>`<div class="warn">⚠ ${e(n)}</div>`).join("")||"<div class='warn'>No readable orders found in the dropped files.</div>"}</div>`;return}
+ if(D.empty){o.innerHTML=rvH+dupH+`<div class="card"><h3>Nothing to build</h3>${D.notes.map(n=>`<div class="warn">⚠ ${e(n)}</div>`).join("")||"<div class='warn'>No readable orders found in the dropped files.</div>"}</div>`;return}
  const sheet=`<div class="sheet">${(()=>{const[a,b]=colSplit(D.groups);let k=0;return[a,b].map(c=>`<div class="card">${c.map(([n,v])=>`<div class="cat">${e(n)}</div>${v.map(([i,q])=>`<div class="row" style="animation-delay:${(k++)*40}ms"><span>${e(i)}</span><b>${q}</b></div>`).join("")}`).join("")}</div>`).join("")})()}</div>`;
  o.innerHTML=`<div class="stats">${[["Units to pack",D.grand],["Parcels",D.parcels],["Sum of pieces + extras",D.pieces+D.ex],["Flags",D.notes.length]].map((s,i)=>`<div class="st" style="animation-delay:${i*90}ms"><small>${s[0]}</small><div data-n="${s[1]}">0</div></div>`).join("")}</div>
- <div class="bar"><button class="btn p" id="dp">⬇ Download out sheet PDF</button><button class="btn" id="dr">Download audit report</button><button class="btn" id="cl">Clear &amp; start over</button></div>${dupH}${exH}${sheet}
+ <div class="bar"><button class="btn p" id="dp">⬇ Download out sheet PDF</button><button class="btn" id="dr">Download audit report</button><button class="btn" id="cl">Clear &amp; start over</button></div>${rvH}${dupH}${sheet}
  <div class="card"><h3>Courier routing</h3><div class="cc">${Object.entries(D.courier).map(([k,v])=>`<span><b>${k}</b> · ${v} parcels</span>`).join("")}</div></div>
  <div class="card"><h3>${D.notes.length?"Notes / flags":"Reconciliation"}</h3>${D.notes.length?D.notes.map(n=>`<div class="warn">⚠ ${e(n)}</div>`).join(""):'<div style="color:var(--ok)">✓ No flags — everything reconciled.</div>'}</div>`;
  o.querySelectorAll("[data-n]").forEach(el=>count(el,+el.dataset.n));
  if(first)o.scrollIntoView({behavior:"smooth",block:"start"})}
-$("out").addEventListener("click",ev=>{const t=ev.target;
+$("out").addEventListener("click",ev=>{const t=ev.target;const b=t.closest("[data-a]");if(b){reviewAct(b);return}
  if(t.closest("[data-c]")){choices[t.closest(".dup").dataset.oid]=t.dataset.c==="B"?"B":+t.dataset.c;render()}
- else if(t.dataset.x){extras.splice(+t.dataset.x,1);render()}
- else if(t.id==="xa"){const n=$("xn").value.trim(),q=parseInt($("xq").value);if(n&&q>0){extras.push([n,q]);render()}}
- else if(t.id==="dp"){makePdf(D).save("Nanyal_Warehouse_Out_Sheet.pdf")}
+ else if(t.id==="dp"){if(reviews.length){$("err").textContent=`Please finish the ${reviews.length} label(s) that need your help first.`;return}makePdf(D).save("Nanyal_Warehouse_Out_Sheet.pdf")}
  else if(t.id==="dr"){dl(new Blob([D.lines.join("\n")+"\n\nNOTES / FLAGS\n"+(D.notes.map(n=>"  ! "+n).join("\n")||"  none")],{type:"text/plain"}),"Nanyal_Warehouse_Out_Sheet_report.txt")}
- else if(t.id==="cl"){files=[];choices={};extras=[];$("out").style.display="none";chips()}});
+ else if(t.id==="cl"){files=[];choices={};extras=[];reviews=[];$("out").style.display="none";chips()}});
 function chips(){$("files").innerHTML=files.map((f,i)=>`<span class="chip">📄 ${e(f.name)} <b>${f.orders.length}</b><button data-r="${i}" title="Remove">✕</button></span>`).join("")}
-$("files").addEventListener("click",ev=>{ev.stopPropagation();const i=ev.target.dataset.r;if(i!=null){files.splice(+i,1);chips();files.length?render():$("out").style.display="none"}});
+$("files").addEventListener("click",ev=>{ev.stopPropagation();const i=ev.target.dataset.r;if(i!=null){reviews=reviews.filter(r=>r.file!==files[+i].name);files.splice(+i,1);chips();files.length?render():$("out").style.display="none"}});
 async function add(list){
  const pdfs=[...list].filter(f=>/\.pdf$/i.test(f.name)||f.type==="application/pdf");$("err").textContent="";
  if(!pdfs.length){$("err").textContent="Please drop PDF label files.";return}
  $("busy").style.display="block";
- for(const f of pdfs){$("busyt").textContent="Reading "+f.name+"…";const notes=[];let orders=[];
-  try{const t=await pdfText(await f.arrayBuffer());if(!t.trim())notes.push(`${f.name}: no text found (scanned image?) - skipped`);else orders=[...parsePostex(t,notes,f.name),...parseInsta(t,notes,f.name)]}
+ for(const f of pdfs){$("busyt").textContent="Reading "+f.name+"…";const notes=[];let orders=[],pages=[];
+  try{pages=await pdfText(await f.arrayBuffer());const t=pages.join("\n");if(!t.trim())notes.push(`${f.name}: no text found (scanned image?) - skipped`);else orders=[...parsePostex(t,notes,f.name),...parseInsta(t,notes,f.name)]}
   catch(x){notes.push(`${f.name}: could not be read (${x.name||"Error"}) - skipped`)}
+  reviews=reviews.filter(r=>r.file!==f.name);makeReviews(f.name,pages,orders,notes);
   files=files.filter(z=>z.name!==f.name);files.push({name:f.name,orders,notes});chips()}
  $("busy").style.display="none";render(true)}
 const dz=$("drop");
